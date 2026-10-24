@@ -30,4 +30,51 @@ for (let q = 0; q < qs.length; q++) {
 }
 assert.ok(html.includes('Your answer: <strong>'), 'Results show the chosen answer');
 assert.ok(html.includes('Correct answer: <strong>'), 'Results show the actual correct answer');
-console.log('PASS: script parses, all 5 answer keys correct, 5/5, 0/5, blanks, all ' + trials + ' individual answer choices, clear results.');
+
+// Run the actual browser code in a lightweight fake DOM, following the real click path.
+function simulateQuiz(sequence, changeFirstAnswer = false) {
+  const app = {innerHTML: ''};
+  const nodes = new Map([['app', app]]);
+  const saved = new Map();
+  const document = {
+    getElementById(id) {
+      if (!nodes.has(id)) nodes.set(id, {innerHTML: '', textContent: '', className: ''});
+      return nodes.get(id);
+    },
+    documentElement: {requestFullscreen: () => Promise.resolve()}
+  };
+  const context = vm.createContext({
+    document, window: {BABA_CONFIG: {}},
+    crypto: {randomUUID: () => '00000000-0000-4000-8000-000000000001'},
+    localStorage: {
+      getItem: key => saved.get(key) ?? null,
+      setItem: (key, value) => saved.set(key, value),
+      removeItem: key => saved.delete(key)
+    },
+    setInterval: () => 1, clearInterval: () => {}, console
+  });
+  vm.runInContext(script, context);
+  vm.runInContext('beginQuiz()', context);
+  for (let i = 0; i < sequence.length; i++) {
+    if (i === 0 && changeFirstAnswer) vm.runInContext('selectAnswer(1)', context);
+    vm.runInContext('selectAnswer(' + sequence[i] + ');nextQuestion()', context);
+  }
+  return {
+    score: vm.runInContext('score', context),
+    stage: vm.runInContext('stage', context),
+    answers: vm.runInContext('answers', context).join(','),
+    html: app.innerHTML
+  };
+}
+const perfect = simulateQuiz(expectedKeys, true);
+assert.equal(perfect.score, 5, 'Clicking through all correct answers earns full marks');
+assert.equal(perfect.stage, 'result', 'Click flow ends on score screen');
+assert.equal(perfect.answers, expectedKeys.join(','), 'Changing a selection keeps the last choice');
+assert.ok(perfect.html.includes('5<span'), 'Result screen displays 5/5');
+assert.ok(perfect.html.includes('Your answer:'), 'Shows actual chosen answer');
+const zero = simulateQuiz(expectedKeys.map(a => (a+1)%4));
+assert.equal(zero.score, 0, 'Clicking five wrong answers yields 0/5');
+const mixed = simulateQuiz([0,1,1,0,0]);
+assert.equal(mixed.score, 3, 'Mixed answers produce exactly 3/5');
+
+console.log('PASS: script parses, all 5 answer keys correct, 5/5, 0/5, blanks, all ' + trials + ' individual answer choices, clear results, and full quiz click-flow simulation.');
